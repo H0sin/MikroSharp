@@ -23,14 +23,17 @@ public class UserManagerApi(IApiConnection connection) : IUserManagerApi
     public Task<List<LimitationEntry>> ListLimitationsAsync(CancellationToken ct = default) =>
         connection.GetAsync<List<LimitationEntry>>($"{BasePath}/limitation", ct);
 
+    public Task<List<ProfileLimitationEntry>> ListProfileLimitationsAsync(CancellationToken ct = default) =>
+        connection.GetAsync<List<ProfileLimitationEntry>>($"{BasePath}/profile-limitation", ct);
+
     public Task CreateOrUpdateUserAsync(string name, string password, int sharedUsers, CancellationToken ct = default)
     {
-        var body = new
+        var body = new Dictionary<string, object?>
         {
-            Name = name,
-            Password = password,
-            Group = "default",
-            SharedUsers = sharedUsers
+            ["name"] = name,
+            ["password"] = password,
+            ["group"] = "default",
+            ["shared-users"] = sharedUsers
         };
         return connection.PutAsync($"{BasePath}/user", body, ct);
     }
@@ -38,11 +41,14 @@ public class UserManagerApi(IApiConnection connection) : IUserManagerApi
     public Task PatchUserAsync(string name, object body, CancellationToken ct = default) =>
         connection.PatchAsync($"{BasePath}/user/{Uri.EscapeDataString(name)}", body, ct);
 
+    public Task PatchUserAsync(string name, IDictionary<string, object?> body, CancellationToken ct = default) =>
+        connection.PatchAsync($"{BasePath}/user/{Uri.EscapeDataString(name)}", body, ct);
+
     public Task SetUserPasswordAsync(string name, string password, CancellationToken ct = default) =>
-        PatchUserAsync(name, new { Password = password }, ct);
+        PatchUserAsync(name, new Dictionary<string, object?> { ["password"] = password }, ct);
 
     public Task DisableUserAsync(string name, bool disabled = true, CancellationToken ct = default) =>
-        PatchUserAsync(name, new { Disabled = (disabled ? "yes" : "no") }, ct);
+        PatchUserAsync(name, new Dictionary<string, object?> { ["disabled"] = (disabled ? "yes" : "no") }, ct);
 
     public Task DeleteUserAsync(string name, CancellationToken ct = default) =>
         connection.DeleteAsync($"{BasePath}/user/{Uri.EscapeDataString(name)}", ct);
@@ -59,21 +65,22 @@ public class UserManagerApi(IApiConnection connection) : IUserManagerApi
             values.Add($"Session-Timeout:{sessionTimeout.Value}");
 
         string attributes = string.Join(",", values);
-        return PatchUserAsync(name, new { Attributes = attributes }, ct);
+        return PatchUserAsync(name, new Dictionary<string, object?> { ["attributes"] = attributes }, ct);
     }
 
     public Task DeleteUserProfileAsync(string userProfileId, CancellationToken ct = default) =>
-        connection.DeleteAsync($"{BasePath}/user-profile/{Uri.EscapeDataString(userProfileId)}", ct);
-
+        // RouterOS .id values like "*13" must not be URL-encoded; leave '*' as-is
+        connection.DeleteAsync($"{BasePath}/user-profile/{userProfileId}", ct);
     public Task CreateProfileAsync(string profileName, string startMode, int days, CancellationToken ct = default)
     {
-        return connection.PutAsync($"{BasePath}/profile", new
+        var body = new Dictionary<string, object?>
         {
-            Name = profileName,
-            Price = "0",
-            StartsWhen = startMode, // kebab-case via policy: "starts-when"
-            Validity = days > 0 ? $"{days}d" : null
-        }, ct);
+            ["name"] = profileName,
+            ["price"] = "0",
+            ["starts-when"] = startMode,
+            ["validity"] = days > 0 ? $"{days}d" : null
+        };
+        return connection.PutAsync($"{BasePath}/profile", body, ct);
     }
 
     public Task CreateProfileAsync(string profileName, StartWhenMode startMode, int days, CancellationToken ct = default)
@@ -84,28 +91,35 @@ public class UserManagerApi(IApiConnection connection) : IUserManagerApi
         int num = Math.Max(1, (int)Math.Round((days == 0 ? 30.0 : (double)days) / 30.0));
         long totalBytes = (long)capGiB * num * 1024L * 1024L * 1024L;
 
-        return connection.PutAsync($"{BasePath}/limitation", new
+        var body = new Dictionary<string, object?>
         {
-            Name = limitationName,
-            TransferLimit = $"{totalBytes}B" // kebab-case via policy: "transfer-limit"
-        }, ct);
+            ["name"] = limitationName,
+            ["transfer-limit"] = $"{totalBytes}B"
+        };
+        return connection.PutAsync($"{BasePath}/limitation", body, ct);
     }
 
     public Task LinkProfileToLimitationAsync(string profileName, string limitationName, CancellationToken ct = default)
     {
-        return connection.PutAsync($"{BasePath}/profile-limitation", new
+        var body = new Dictionary<string, object?>
         {
-            Profile = profileName,
-            Limitation = limitationName
-        }, ct);
+            ["profile"] = profileName,
+            ["limitation"] = limitationName
+        };
+        return connection.PutAsync($"{BasePath}/profile-limitation", body, ct);
     }
+
+    public Task DeleteProfileLimitationAsync(string profileLimitationId, CancellationToken ct = default) =>
+        // RouterOS .id values like "*13" must not be URL-encoded; leave '*' as-is
+        connection.DeleteAsync($"{BasePath}/profile-limitation/{profileLimitationId}", ct);
 
     public Task LinkUserToProfileAsync(string userName, string profileName, CancellationToken ct = default)
     {
-        return connection.PutAsync($"{BasePath}/user-profile", new
+        var body = new Dictionary<string, object?>
         {
-            User = userName,
-            Profile = profileName
-        }, ct);
+            ["user"] = userName,
+            ["profile"] = profileName
+        };
+        return connection.PutAsync($"{BasePath}/user-profile", body, ct);
     }
 }

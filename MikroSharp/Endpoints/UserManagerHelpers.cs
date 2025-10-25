@@ -1,4 +1,7 @@
 using MikroSharp.Abstractions;
+using MikroSharp.Core;
+using System;
+using System.Linq;
 
 namespace MikroSharp.Endpoints;
 
@@ -63,15 +66,136 @@ public static class UserManagerHelpers
 
         (string profileName, string? limitationName) = BuildNames(days, capGiB, sharedUsers, startMode);
 
-        await um.CreateProfileAsync(profileName, startMode, days, ct);
+        // Reuse existing profile if present; tolerate duplicate on create
+        var existingProfiles = await um.ListProfilesAsync(ct);
+        bool profileExists = existingProfiles.Any(p => string.Equals((p.Name ?? string.Empty).Trim(), (profileName ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase));
+        if (!profileExists)
+        {
+            try
+            {
+                await um.CreateProfileAsync(profileName, startMode, days, ct);
+            }
+            catch (MikroSharpException ex)
+            {
+                var code = (int?)ex.StatusCode;
+                if (code is 400 or 409)
+                {
+                    var body = ex.ResponseBody ?? string.Empty;
+                    if (!(body.Contains("exist", StringComparison.OrdinalIgnoreCase) ||
+                          body.Contains("already", StringComparison.OrdinalIgnoreCase) ||
+                          body.Contains("duplicate", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        throw;
+                    }
+                }
+                else
+                {
+                    throw;
+                }
+            }
+        }
 
         if (limitationName != null)
         {
-            await um.CreateLimitationAsync(limitationName, capGiB, days, ct);
-            await um.LinkProfileToLimitationAsync(profileName, limitationName, ct);
+            // Reuse existing limitation if present; tolerate duplicate on create
+            var existingLimitations = await um.ListLimitationsAsync(ct);
+            bool limitationExists = existingLimitations.Any(l => string.Equals((l.Name ?? string.Empty).Trim(), (limitationName ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase));
+            if (!limitationExists)
+            {
+                try
+                {
+                    await um.CreateLimitationAsync(limitationName, capGiB, days, ct);
+                }
+                catch (MikroSharpException ex)
+                {
+                    var code = (int?)ex.StatusCode;
+                    if (code == 400 || code == 409)
+                    {
+                        var body = ex.ResponseBody ?? string.Empty;
+                        if (!(body.Contains("exist", StringComparison.OrdinalIgnoreCase) ||
+                              body.Contains("already", StringComparison.OrdinalIgnoreCase) ||
+                              body.Contains("duplicate", StringComparison.OrdinalIgnoreCase)))
+                        {
+                            throw;
+                        }
+                    }
+                    else
+                    {
+                        throw;
+                    }
+                }
+            }
+
+            // Check existing profile->limitation links and only create one if none exist
+            var existingProfileLimitations = await um.ListProfileLimitationsAsync(ct);
+            var matches = existingProfileLimitations
+                .Where(pl => string.Equals((pl.Profile ?? string.Empty).Trim(), (profileName ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase)
+                             && string.Equals((pl.Limitation ?? string.Empty).Trim(), (limitationName ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            // If at least one link exists, just use it as-is without deleting duplicates.
+            // Only create a link if none exist.
+            if (matches.Count == 0)
+            {
+                // No existing link; create one. If the API reports a duplicate, swallow as fallback.
+                try
+                {
+                    await um.LinkProfileToLimitationAsync(profileName, limitationName, ct);
+                }
+                catch (MikroSharpException ex)
+                {
+                    var code = (int?)ex.StatusCode;
+                    if (code == 400 || code == 409)
+                    {
+                        var body = ex.ResponseBody ?? string.Empty;
+                        if (body.Contains("exist", StringComparison.OrdinalIgnoreCase) ||
+                            body.Contains("already", StringComparison.OrdinalIgnoreCase) ||
+                            body.Contains("duplicate", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // ignore duplicate link
+                        }
+                        else
+                        {
+                            throw;
+                        }
+                    }
+                    else
+                    {
+                        throw;
+                    }
+                }
+            }
         }
 
-        await um.LinkUserToProfileAsync(user, profileName, ct);
+        // Link user to profile; skip if already linked; tolerate duplicate error
+        var userProfiles = await um.ListUserProfilesAsync(ct);
+        bool alreadyLinked = userProfiles.Any(p => string.Equals((p.User ?? string.Empty).Trim(), (user ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase) &&
+                                                  string.Equals((p.Profile ?? string.Empty).Trim(), (profileName ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase));
+        if (!alreadyLinked)
+        {
+            try
+            {
+                await um.LinkUserToProfileAsync(user, profileName, ct);
+            }
+            catch (MikroSharpException ex)
+            {
+                var code = (int?)ex.StatusCode;
+                if (code == 400 || code == 409)
+                {
+                    var body = ex.ResponseBody ?? string.Empty;
+                    if (!(body.Contains("exist", StringComparison.OrdinalIgnoreCase) ||
+                          body.Contains("already", StringComparison.OrdinalIgnoreCase) ||
+                          body.Contains("duplicate", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        throw;
+                    }
+                }
+                else
+                {
+                    throw;
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -91,7 +215,7 @@ public static class UserManagerHelpers
         => um.ApplyDynamicPlanAsync(user, password, days, capGiB, sharedUsers, startMode.ToApiValue(), rateLimit, staticIp, ct);
 
     /// <summary>
-    /// Remove all current profile links for the user, then call <see cref="ApplyDynamicPlanAsync"/> to recreate.
+    /// Remove all current profile links for the user, then call <see cref="ApplyDynamicPlanAsync(MikroSharp.Abstractions.IUserManagerApi,string,string,int,int,int,string,string,string,System.Threading.CancellationToken)"/> to recreate.
     /// </summary>
     public static async Task RenewDynamicPlanAsync(
         this IUserManagerApi um,
@@ -106,11 +230,12 @@ public static class UserManagerHelpers
         CancellationToken ct = default)
     {
         var oldProfiles = await um.ListUserProfilesAsync(ct);
-        foreach (var oldProfile in oldProfiles.Where(p => p.User == user))
+        foreach (var oldProfile in oldProfiles.Where(p => string.Equals(p.User, user, StringComparison.OrdinalIgnoreCase)))
         {
             await um.DeleteUserProfileAsync(oldProfile.Id, ct);
         }
 
+        await um.DeleteUserAsync(user,ct);
         await um.ApplyDynamicPlanAsync(user, password, days, capGiB, sharedUsers, startMode, rateLimit, staticIp, ct);
     }
 

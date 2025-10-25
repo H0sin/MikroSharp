@@ -1,10 +1,10 @@
 # MikroSharp
 
-A modern, strongly-typed .NET client for MikroTik RouterOS REST API (User-Manager focused), with clean ergonomics, typed helpers, and robust error handling.
+A modern, strongly-typed .NET client for MikroTik RouterOS REST API (User-Manager focused), with clean ergonomics, typed helpers, robust error handling, and explicit dash-case request keys.
 
 - .NET 9 target (works with .NET 8+ via multi-targeting in the future)
 - Simple client setup with Basic Auth
-- Kebab-case JSON naming policy out of the box to match RouterOS REST field names
+- Explicit dash-case (kebab-case) request keys matching RouterOS REST field names
 - Clear models and XML docs for IntelliSense
 - High-level helper extensions for common tasks (creating profiles/limitations, linking, setting attributes)
 
@@ -138,50 +138,18 @@ await client.UserManager.RenewDynamicPlanAsync(
 );
 ```
 
-## Model helpers
+## JSON field names (dash-case)
 
-`UmUser` frequently returns some fields as strings. Use the helpers to make them easy to consume:
+RouterOS REST uses dash-case (kebab-case) field names such as `shared-users`, `starts-when`, and `transfer-limit`.
+To ensure exact compatibility and avoid mistakes, MikroSharp sends request bodies using explicit dictionaries with the exact field names expected by the API. This avoids relying on automatic naming policies.
 
-```csharp
-using MikroSharp.Models;
+Examples of keys we send:
+- `name`, `password`, `group`, `shared-users`
+- `starts-when`, `validity`, `price`
+- `transfer-limit`
+- `user`, `profile`, `limitation`
 
-var user = await client.UserManager.GetUserAsync("alice");
-
-bool disabled = user.IsDisabled();           // parses "yes"/"no"
-int? shared = user.SharedUsersAsInt();       // parses "1" => 1
-```
-
-## Public API overview
-
-Namespaces of interest:
-- MikroSharp: main client `MikroSharpClient`
-- MikroSharp.Abstractions: interfaces and enums (`IMikroSharpClient`, `IUserManagerApi`, `StartWhenMode`, `MikroSharpOptions`)
-- MikroSharp.Endpoints: endpoint implementations and helper extensions (`UserManagerApi`, `UserManagerHelpers`)
-- MikroSharp.Models: models returned from the REST API
-
-Key interfaces:
-
-- `IMikroSharpClient`
-  - `IUserManagerApi UserManager` – access to User-Manager operations
-
-- `IUserManagerApi`
-  - List/Get: `ListUsersAsync`, `GetUserAsync`, `ListUserProfilesAsync`, `ListProfilesAsync`, `ListLimitationsAsync`
-  - Users: `CreateOrUpdateUserAsync`, `PatchUserAsync`, `SetUserPasswordAsync`, `DisableUserAsync`, `DeleteUserAsync`
-  - Attributes: `SetUserAttributesAsync` (builds Mikrotik-Rate-Limit, Framed-IP-Address, Session-Timeout)
-  - Profiles & limitations: `CreateProfileAsync`, `CreateLimitationAsync`, `LinkProfileToLimitationAsync`, `LinkUserToProfileAsync`
-
-Helpers (extension methods on `IUserManagerApi`):
-- `EnableUserAsync`, `SetRateLimitAsync`, `SetStaticIpAsync`, `SetSessionTimeoutAsync`
-- `ApplyDynamicPlanAsync`, `RenewDynamicPlanAsync`
-
-## JSON naming policy (dash-case)
-
-RouterOS REST commonly uses dash-case (kebab-case) field names (e.g., `shared-users`, `starts-when`).
-MikroSharp configures a custom `System.Text.Json` naming policy that converts .NET property names to dash-case.
-
-Implications:
-- When sending bodies (e.g., `PatchUserAsync(name, new { Disabled = "yes" })`), your PascalCase property names are converted to the correct dash-case names automatically.
-- Models use `[JsonPropertyName]` where needed, to align with RouterOS response fields like `.id`, `shared-users`.
+Responses are still deserialized into models using `[JsonPropertyName]` where needed (e.g., `.id`, `shared-users`).
 
 ## Error handling
 
@@ -213,6 +181,16 @@ catch (MikroSharp.Core.MikroSharpException ex)
 ```csharp
 await using var client = new MikroSharpClient("https://router", "admin", "password");
 // use client...
+```
+
+## Tests
+
+This repository includes a small test suite to prevent regressions around request body field names. In particular, we verify outgoing JSON uses the exact dash-case keys expected by RouterOS (e.g., `group`, not `g-roup`).
+
+Run tests:
+
+```bash
+dotnet test MikroSharp.Tests/MikroSharp.Tests.csproj -v minimal
 ```
 
 ## Roadmap

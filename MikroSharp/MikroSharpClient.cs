@@ -5,7 +5,6 @@ using System.Text.Json.Serialization;
 using MikroSharp.Abstractions;
 using MikroSharp.Core;
 using MikroSharp.Endpoints;
-using MikroSharp.Serialization;
 
 namespace MikroSharp;
 
@@ -34,28 +33,24 @@ public class MikroSharpClient : IMikroSharpClient, IDisposable
         );
         httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
-        // JSON serializer settings
         var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
         {
-            // Ignore null values when writing request bodies
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-
-            // Use dash-case to match RouterOS REST API
-            PropertyNamingPolicy = KebabCaseLowerNamingPolicy.Instance,
-            DictionaryKeyPolicy = KebabCaseLowerNamingPolicy.Instance,
+            PropertyNamingPolicy = null,
+            DictionaryKeyPolicy = null,
         };
 
         _connection = new RestApiConnection(httpClient, jsonOptions, disposeClient: true);
         _disposeConnection = true;
 
-        // Build endpoint groups
         UserManager = new UserManagerApi(_connection);
     }
 
     /// <summary>
     /// Create a client using options and optional JSON configuration.
     /// </summary>
-    public MikroSharpClient(MikroSharpOptions options, HttpMessageHandler? handler = null, Action<JsonSerializerOptions>? configureJson = null)
+    public MikroSharpClient(MikroSharpOptions options, HttpMessageHandler? handler = null,
+        Action<JsonSerializerOptions>? configureJson = null)
     {
         var httpClient = handler == null ? new HttpClient() : new HttpClient(handler, false);
         httpClient.BaseAddress = new Uri(options.BaseUrl.TrimEnd('/') + "/");
@@ -78,8 +73,8 @@ public class MikroSharpClient : IMikroSharpClient, IDisposable
         var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
         {
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-            PropertyNamingPolicy = KebabCaseLowerNamingPolicy.Instance,
-            DictionaryKeyPolicy = KebabCaseLowerNamingPolicy.Instance,
+            PropertyNamingPolicy = null,
+            DictionaryKeyPolicy = null,
         };
         configureJson?.Invoke(jsonOptions);
 

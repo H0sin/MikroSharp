@@ -30,6 +30,11 @@ public interface IUserManagerApi
     Task<List<LimitationEntry>> ListLimitationsAsync(CancellationToken ct = default);
 
     /// <summary>
+    /// List profile->limitation links.
+    /// </summary>
+    Task<List<ProfileLimitationEntry>> ListProfileLimitationsAsync(CancellationToken ct = default);
+
+    /// <summary>
     /// Create or update a user. Group will be set to "default".
     /// </summary>
     Task CreateOrUpdateUserAsync(string name, string password, int sharedUsers, CancellationToken ct = default);
@@ -38,6 +43,11 @@ public interface IUserManagerApi
     /// Patch arbitrary user fields. Property names will be serialized in kebab-case (dash-case).
     /// </summary>
     Task PatchUserAsync(string name, object body, CancellationToken ct = default);
+
+    /// <summary>
+    /// Patch arbitrary user fields. This method accepts a dictionary so callers can send exact API key names without relying on a naming policy.
+    /// </summary>
+    Task PatchUserAsync(string name, IDictionary<string, object?> body, CancellationToken ct = default);
 
     /// <summary>
     /// Set user's password.
@@ -85,6 +95,11 @@ public interface IUserManagerApi
     /// Link a profile to a limitation.
     /// </summary>
     Task LinkProfileToLimitationAsync(string profileName, string limitationName, CancellationToken ct = default);
+
+    /// <summary>
+    /// Delete a profile->limitation link by its id.
+    /// </summary>
+    Task DeleteProfileLimitationAsync(string profileLimitationId, CancellationToken ct = default);
 
     /// <summary>
     /// Link a user to a profile.
