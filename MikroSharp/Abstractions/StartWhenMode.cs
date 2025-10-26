@@ -9,7 +9,7 @@ public enum StartWhenMode
     FirstAuth
 }
 
-internal static class StartWhenModeExtensions
+public static class StartWhenModeExtensions
 {
     public static string ToApiValue(this StartWhenMode mode) => mode switch
     {
@@ -18,4 +18,3 @@ internal static class StartWhenModeExtensions
         _ => "assigned"
     };
 }
-

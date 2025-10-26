@@ -59,6 +59,33 @@ await client.UserManager.EnableUserAsync("alice");
 await client.UserManager.DeleteUserAsync("alice");
 ```
 
+### Get full user details (user + profiles + limitations)
+
+You can fetch an aggregated view of a user, including the base user entry, linked profiles, the limitations attached to each profile, and parsed attributes (rate-limit, static IP, session-timeout):
+
+```csharp
+using MikroSharp.Endpoints; // for GetUserDetailsAsync extension
+
+var details = await client.UserManager.GetUserDetailsAsync("alice");
+
+// Base user object from RouterOS
+Console.WriteLine($"User: {details.User.Name}, Disabled: {details.User.Disabled}, Shared: {details.User.SharedUsers}");
+
+// Parsed attributes (if present)
+Console.WriteLine($"RateLimit: {details.RateLimit}, StaticIp: {details.StaticIp}, SessionTimeout: {details.SessionTimeout}");
+
+// Profiles and their linked limitations
+foreach (var p in details.Profiles)
+{
+    Console.WriteLine($"Profile: {p.Profile} -> Limitations: {string.Join(", ", p.Limitations)}");
+}
+```
+
+Notes:
+- Duplicated links are de-duplicated in the result.
+- Matching is case-insensitive for usernames and profile names.
+- Unknown or missing attributes are handled gracefully (nulls).
+
 ### Configure with options
 
 You can also configure the client using an options object (timeouts, extra headers, disposal control), and optionally tweak the JSON serializer.

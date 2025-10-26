@@ -5,7 +5,7 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
 
-        <PackageId>MikroSharp</PackageId> <Version>1.0.5</Version> <Authors>H0sin</Authors> <Company>Digial</Company>
+        <PackageId>MikroSharp</PackageId> <Version>1.0.7</Version> <Authors>H0sin</Authors> <Company>Digial</Company>
         <Description>A modern .NET client for managing MikroTik devices using the RouterOS API.</Description>
         <PackageTags>mikrotik, routeros, api, network, networking, client</PackageTags>
         <PackageLicenseExpression>MIT</PackageLicenseExpression> <PackageProjectUrl>https://github.com/h0sin/MikroSharp.git</PackageProjectUrl>

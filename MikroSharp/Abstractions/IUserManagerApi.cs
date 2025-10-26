@@ -1,4 +1,5 @@
 using MikroSharp.Models;
+using System.Text.Json;
 
 namespace MikroSharp.Abstractions;
 
@@ -15,9 +16,36 @@ public interface IUserManagerApi
     Task<UmUser> GetUserAsync(string name, CancellationToken ct = default);
 
     /// <summary>
+    /// Try to search users by exact name using server-side filtering if supported by RouterOS.
+    /// Returns zero or more matches; implementations should treat this as best-effort.
+    /// </summary>
+    Task<List<UmUser>> SearchUsersByNameAsync(string name, CancellationToken ct = default);
+
+    /// <summary>
+    /// Get RouterOS internal user id (".id") for a username; returns null if not found.
+    /// </summary>
+    Task<string?> GetUserIdByNameAsync(string name, CancellationToken ct = default);
+
+    /// <summary>
+    /// Call /user/monitor for a user by id with body {"once":true, ".id":"*n"}. Returns raw JSON.
+    /// </summary>
+    Task<JsonElement> MonitorUserByIdAsync(string id, CancellationToken ct = default);
+
+    /// <summary>
+    /// Resolve user's id by name then call /user/monitor. Throws if user is not found.
+    /// </summary>
+    Task<JsonElement> MonitorUserAsync(string name, CancellationToken ct = default);
+
+    /// <summary>
     /// List user-to-profile links (each item links a user to a profile in User-Manager).
     /// </summary>
     Task<List<UmUserProfile>> ListUserProfilesAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// List user-to-profile entries for a specific user including runtime state and end-time.
+    /// GET /rest/user-manager/user-profile?user={name}
+    /// </summary>
+    Task<List<UserProfileStatus>> ListUserProfilesByUserAsync(string user, CancellationToken ct = default);
 
     /// <summary>
     /// List available profiles.

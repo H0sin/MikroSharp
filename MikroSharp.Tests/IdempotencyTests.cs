@@ -33,12 +33,34 @@ public class IdempotencyTests
             => Task.FromResult(Limitations.ToList());
         public Task<List<ProfileLimitationEntry>> ListProfileLimitationsAsync(CancellationToken ct = default)
             => Task.FromResult(ProfileLimitations.ToList());
+
+        public Task<List<UmUser>> SearchUsersByNameAsync(string name, CancellationToken ct = default)
+            => Task.FromResult(Users.Where(u => u.Name == name).ToList());
+        public Task<string?> GetUserIdByNameAsync(string name, CancellationToken ct = default)
+            => Task.FromResult<string?>(Users.Any(u => u.Name == name) ? "*1" : null);
+        public Task<System.Text.Json.JsonElement> MonitorUserByIdAsync(string id, CancellationToken ct = default)
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse("{\"active\":false}");
+            return Task.FromResult(doc.RootElement.Clone());
+        }
+        public async Task<System.Text.Json.JsonElement> MonitorUserAsync(string name, CancellationToken ct = default)
+        {
+            var id = await GetUserIdByNameAsync(name, ct) ?? "*0";
+            return await MonitorUserByIdAsync(id, ct);
+        }
+
         public Task CreateOrUpdateUserAsync(string name, string password, int sharedUsers, CancellationToken ct = default)
         {
             var existing = Users.FirstOrDefault(u => u.Name == name);
             if (existing is null)
             {
-                Users.Add(new UmUser(Id: name, Name: name, Password: password, Group: "default", SharedUsers: sharedUsers));
+                Users.Add(new UmUser(
+                    Name: name,
+                    Group: "default",
+                    Disabled: "no",
+                    SharedUsers: sharedUsers.ToString(),
+                    Attributes: null
+                ));
             }
             return Task.CompletedTask;
         }

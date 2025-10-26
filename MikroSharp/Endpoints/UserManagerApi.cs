@@ -1,6 +1,7 @@
 using MikroSharp.Abstractions;
 using MikroSharp.Core;
 using MikroSharp.Models;
+using System.Text.Json;
 
 namespace MikroSharp.Endpoints;
 
@@ -8,14 +9,84 @@ public class UserManagerApi(IApiConnection connection) : IUserManagerApi
 {
     private const string BasePath = "/rest/user-manager";
 
+    private sealed record UserIdEntry(
+        [property: System.Text.Json.Serialization.JsonPropertyName(".id")] string Id,
+        [property: System.Text.Json.Serialization.JsonPropertyName("name")] string Name
+    );
+
     public Task<List<UmUser>> ListUsersAsync(CancellationToken ct = default) =>
-        connection.GetAsync<List<UmUser>>($"{BasePath}/user", ct);
+        connection.GetAsync<List<UmUser>>("${BasePath}/user".Replace("${BasePath}", BasePath), ct);
 
     public Task<UmUser> GetUserAsync(string name, CancellationToken ct = default) =>
         connection.GetAsync<UmUser>($"{BasePath}/user/{Uri.EscapeDataString(name)}", ct);
 
+    public async Task<List<UmUser>> SearchUsersByNameAsync(string name, CancellationToken ct = default)
+    {
+        // Try server-side filtering if supported; fallback to client-side filter of ListUsers
+        try
+        {
+            var encoded = Uri.EscapeDataString(name);
+            // Some RouterOS builds accept simple query filter by exact name
+            var result = await connection.GetAsync<List<UmUser>>($"{BasePath}/user?name={encoded}", ct);
+            if (result is { Count: > 0 })
+                return result.Where(u => string.Equals((u.Name ?? string.Empty).Trim(), (name ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
+        }
+        catch (MikroSharpException)
+        {
+            // ignore and fallback
+        }
+
+        var all = await ListUsersAsync(ct);
+        return all.Where(u => string.Equals((u.Name ?? string.Empty).Trim(), (name ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
+    }
+
+    public async Task<string?> GetUserIdByNameAsync(string name, CancellationToken ct = default)
+    {
+        try
+        {
+            var encoded = Uri.EscapeDataString(name);
+            var result = await connection.GetAsync<List<UserIdEntry>>($"{BasePath}/user?name={encoded}", ct);
+            var match = result.FirstOrDefault(e => string.Equals((e.Name ?? string.Empty).Trim(), (name ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase));
+            return match?.Id;
+        }
+        catch
+        {
+            // fallback to full list of ids
+            try
+            {
+                var all = await connection.GetAsync<List<UserIdEntry>>($"{BasePath}/user", ct);
+                var match = all.FirstOrDefault(e => string.Equals((e.Name ?? string.Empty).Trim(), (name ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase));
+                return match?.Id;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+    }
+
+    public Task<JsonElement> MonitorUserByIdAsync(string id, CancellationToken ct = default)
+    {
+        var body = new Dictionary<string, object?>
+        {
+            ["once"] = true,
+            [".id"] = id
+        };
+        
+        return connection.PostAsync<JsonElement>($"{BasePath}/user/monitor", body, ct);
+    }
+
+    public async Task<JsonElement> MonitorUserAsync(string name, CancellationToken ct = default)
+    {
+        var id = await GetUserIdByNameAsync(name, ct) ?? throw new MikroSharp.Core.MikroSharpException($"User '{name}' not found to monitor.", "POST", $"{BasePath}/user/monitor", System.Net.HttpStatusCode.NotFound, null);
+        return await MonitorUserByIdAsync(id, ct);
+    }
+
     public Task<List<UmUserProfile>> ListUserProfilesAsync(CancellationToken ct = default) =>
         connection.GetAsync<List<UmUserProfile>>($"{BasePath}/user-profile", ct);
+
+    public Task<List<UserProfileStatus>> ListUserProfilesByUserAsync(string user, CancellationToken ct = default) =>
+        connection.GetAsync<List<UserProfileStatus>>($"{BasePath}/user-profile?user={Uri.EscapeDataString(user)}", ct);
 
     public Task<List<ProfileEntry>> ListProfilesAsync(CancellationToken ct = default) =>
         connection.GetAsync<List<ProfileEntry>>($"{BasePath}/profile", ct);
@@ -88,8 +159,7 @@ public class UserManagerApi(IApiConnection connection) : IUserManagerApi
 
     public Task CreateLimitationAsync(string limitationName, int capGiB, int days, CancellationToken ct = default)
     {
-        int num = Math.Max(1, (int)Math.Round((days == 0 ? 30.0 : (double)days) / 30.0));
-        long totalBytes = (long)capGiB * num * 1024L * 1024L * 1024L;
+        long totalBytes = capGiB * 1024L * 1024L * 1024L;
 
         var body = new Dictionary<string, object?>
         {

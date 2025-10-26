@@ -32,6 +32,21 @@ internal class RestApiConnection(HttpClient http, JsonSerializerOptions jsonOpti
         using var response = await SendCoreAsync(HttpMethod.Delete, path, null, ct);
     }
 
+    public async Task<T> PostAsync<T>(string path, object body, CancellationToken ct = default)
+    {
+        using var content = SerializeBody(body);
+        using var response = await SendCoreAsync(HttpMethod.Post, path, content, ct);
+        var contentStream = await response.Content.ReadAsStreamAsync(ct);
+        return await JsonSerializer.DeserializeAsync<T>(contentStream, jsonOptions, ct)
+               ?? throw new MikroSharpException("Failed to deserialize response.", "POST", path, response.StatusCode, null);
+    }
+
+    public async Task PostAsync(string path, object body, CancellationToken ct = default)
+    {
+        using var content = SerializeBody(body);
+        using var response = await SendCoreAsync(HttpMethod.Post, path, content, ct);
+    }
+
     private StringContent SerializeBody(object body)
     {
         string json = JsonSerializer.Serialize(body, jsonOptions);
@@ -54,9 +69,17 @@ internal class RestApiConnection(HttpClient http, JsonSerializerOptions jsonOpti
                 try
                 {
                     using var doc = JsonDocument.Parse(errorBody);
-                    if (doc.RootElement.TryGetProperty("detail", out var d))
+                    var root = doc.RootElement;
+                    if (root.ValueKind == JsonValueKind.Object)
                     {
-                        detail = d.GetString() ?? errorBody;
+                        if (root.TryGetProperty("detail", out var d))
+                        {
+                            detail = d.GetString() ?? errorBody;
+                        }
+                        else if (root.TryGetProperty("message", out var m))
+                        {
+                            detail = m.GetString() ?? errorBody;
+                        }
                     }
                 }
                 catch

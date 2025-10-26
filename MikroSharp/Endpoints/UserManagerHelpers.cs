@@ -2,6 +2,11 @@ using MikroSharp.Abstractions;
 using MikroSharp.Core;
 using System;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Collections.Generic;
+using MikroSharp.Models;
+using System.Text.Json;
 
 namespace MikroSharp.Endpoints;
 
@@ -62,8 +67,7 @@ public static class UserManagerHelpers
     {
         await um.CreateOrUpdateUserAsync(user, password, sharedUsers, ct);
         await um.SetUserAttributesAsync(user, rateLimit, staticIp, ct: ct);
-
-
+        
         (string profileName, string? limitationName) = BuildNames(days, capGiB, sharedUsers, startMode);
 
         // Reuse existing profile if present; tolerate duplicate on create
@@ -254,4 +258,191 @@ public static class UserManagerHelpers
         string? staticIp = null,
         CancellationToken ct = default)
         => um.RenewDynamicPlanAsync(user, password, days, capGiB, sharedUsers, startMode.ToApiValue(), rateLimit, staticIp, ct);
+
+    private static (string? RateLimit, string? StaticIp, int? SessionTimeout) ParseAttributes(string? attributes)
+    {
+        string? rateLimit = null;
+        string? staticIp = null;
+        int? sessionTimeout = null;
+
+        if (!string.IsNullOrWhiteSpace(attributes))
+        {
+            var parts = attributes.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            foreach (var part in parts)
+            {
+                var kv = part.Split(':', 2);
+                if (kv.Length != 2) continue;
+                var key = kv[0].Trim();
+                var value = kv[1].Trim();
+                if (key.Equals("Mikrotik-Rate-Limit", StringComparison.OrdinalIgnoreCase))
+                    rateLimit = value;
+                else if (key.Equals("Framed-IP-Address", StringComparison.OrdinalIgnoreCase))
+                    staticIp = value;
+                else if (key.Equals("Session-Timeout", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (int.TryParse(value, out var seconds)) sessionTimeout = seconds;
+                }
+            }
+        }
+
+        return (rateLimit, staticIp, sessionTimeout);
+    }
+
+    /// <summary>
+    /// Aggregate full information about a user: base user entry, assigned profiles, and limitations per profile,
+    /// plus parsed attributes like rate-limit, static IP and session-timeout.
+    /// </summary>
+    public static async Task<UserDetails> GetUserDetailsAsync(this IUserManagerApi um, string name, CancellationToken ct = default)
+    {
+        var user = await um.GetUserAsync(name, ct);
+
+        // Profiles linked to this user
+        var allUserProfiles = await um.ListUserProfilesAsync(ct);
+        var userProfiles = allUserProfiles
+            .Where(p => string.Equals((p.User ?? string.Empty).Trim(), (name ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase))
+            .Select(p => p.Profile)
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // Map profiles to their limitations
+        var profileLimitations = await um.ListProfileLimitationsAsync(ct);
+        var perProfile = new List<UserProfileDetails>();
+        foreach (var profile in userProfiles)
+        {
+            var lims = profileLimitations
+                .Where(pl => string.Equals((pl.Profile ?? string.Empty).Trim(), (profile ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase))
+                .Select(pl => pl.Limitation)
+                .Where(l => !string.IsNullOrWhiteSpace(l))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            perProfile.Add(new UserProfileDetails(profile, lims));
+        }
+
+        var (rateLimit, staticIp, sessionTimeout) = ParseAttributes(user.Attributes);
+
+        return new UserDetails(user, perProfile, rateLimit, staticIp, sessionTimeout, null);
+    }
+
+    /// <summary>
+    /// Minimal details: combines GetUser with /user/monitor result. Useful for quick checks (no profiles/limitations).
+    /// </summary>
+    public static async Task<UserWithMonitor> GetUserWithMonitorAsync(this IUserManagerApi um, string name, CancellationToken ct = default)
+    {
+        var user = await um.GetUserAsync(name, ct);
+        var monitor = await um.MonitorUserAsync(name, ct);
+        return new UserWithMonitor(user, monitor);
+    }
+
+    /// <summary>
+    /// Minimal user details using monitor to confirm existence: returns UmUser and parsed attributes only.
+    /// Does NOT fetch profiles or limitations. Uses /user/monitor via POST with {"once":true,".id":"*n"}.
+    /// </summary>
+    public static async Task<UserDetails> GetUserDetailsMinimalAsync(this IUserManagerApi um, string name, CancellationToken ct = default)
+    {
+        // Resolve RouterOS .id first
+        var id = await um.GetUserIdByNameAsync(name, ct);
+        
+        if (string.IsNullOrWhiteSpace(id))
+            throw new MikroSharpException($"User '{name}' not found.", "POST", "/rest/user-manager/user/monitor", System.Net.HttpStatusCode.NotFound, null);
+
+        // Call monitor and capture payload (consumption/active info)
+        JsonElement monitorJson;
+        
+        try
+        {
+            monitorJson = await um.MonitorUserByIdAsync(id!, ct);
+        }
+        catch (MikroSharpException ex)
+        {
+            throw new MikroSharpException($"Failed to monitor user '{name}': {ex.Message}", ex.Method, ex.Path, ex.StatusCode, ex.ResponseBody, ex);
+        }
+
+        // Map monitor payload to strongly-typed model
+        UserMonitorInfo? monitor = null;
+        try
+        {
+            monitor = monitorJson.Deserialize<UserMonitorInfo>();
+        }
+        catch
+        {
+            // If deserialization fails, keep it null rather than throwing
+        }
+
+        // Fetch user model; if GET by name fails (404/500), fallback to search/list
+        UmUser? user = null;
+        try
+        {
+            user = await um.GetUserAsync(name, ct);
+        }
+        catch (MikroSharpException)
+        {
+            var matches = await um.SearchUsersByNameAsync(name, ct);
+            user = matches.FirstOrDefault(u => string.Equals((u.Name ?? string.Empty).Trim(), (name ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase));
+            if (user is null)
+            {
+                var all = await um.ListUsersAsync(ct);
+                user = all.FirstOrDefault(u => string.Equals((u.Name ?? string.Empty).Trim(), (name ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
+        if (user is null)
+            throw new MikroSharpException($"User '{name}' not found after monitor.", "GET", $"/rest/user-manager/user/{name}", System.Net.HttpStatusCode.NotFound, null);
+
+        var (rateLimit, staticIp, sessionTimeout) = ParseAttributes(user.Attributes);
+        return new UserDetails(user, new List<UserProfileDetails>(), rateLimit, staticIp, sessionTimeout, monitor);
+    }
+
+    /// <summary>
+    /// Fetches current account status for the specified user by calling:
+    /// - GET /rest/user-manager/user-profile?user={name} for profile link state and expiry (end-time)
+    /// - POST /rest/user-manager/user/monitor with {"once":true, ".id":"*n"} for counters and actual profile
+    /// Returns a combined model. If the user id cannot be resolved, monitor will be null.
+    /// </summary>
+    public static async Task<UserAccountStatus> GetUserAccountStatusAsync(this IUserManagerApi um, string name, CancellationToken ct = default)
+    {
+        // Profile statuses including end-time/state
+        var profiles = await um.ListUserProfilesByUserAsync(name, ct);
+
+        // Monitor info is optional if we cannot resolve id
+        UserMonitorInfo? monitor = null;
+        var id = await um.GetUserIdByNameAsync(name, ct);
+        if (!string.IsNullOrWhiteSpace(id))
+        {
+            JsonElement monitorJson;
+            try
+            {
+                monitorJson = await um.MonitorUserByIdAsync(id!, ct);
+            }
+            catch (MikroSharpException)
+            {
+                monitorJson = default;
+            }
+
+            if (monitorJson.ValueKind != JsonValueKind.Undefined && monitorJson.ValueKind != JsonValueKind.Null)
+            {
+                try
+                {
+                    // RouterOS may return an array with a single object, or a bare object
+                    if (monitorJson.ValueKind == JsonValueKind.Array)
+                    {
+                        var arr = monitorJson.EnumerateArray();
+                        if (arr.MoveNext())
+                            monitor = arr.Current.Deserialize<UserMonitorInfo>();
+                    }
+                    else if (monitorJson.ValueKind == JsonValueKind.Object)
+                    {
+                        monitor = monitorJson.Deserialize<UserMonitorInfo>();
+                    }
+                }
+                catch
+                {
+                    // ignore parse failures
+                }
+            }
+        }
+
+        return new UserAccountStatus(name, profiles, monitor);
+    }
 }
